@@ -126,8 +126,10 @@ class CaptioningRNN(object):
         # (3) Use either a vanilla RNN or LSTM (depending on self.cell_type) to
         # process the sequence of input word vectors and produce hidden state
         # vectors for all timesteps, producing an array of shape (N, T, H).
-        # now, use vanilla RNN
-        h, rnn_forward_caches = rnn_forward(word_embed_out, h0, Wx, Wh, b)
+        if self.cell_type == 'rnn':
+            h, forward_caches = rnn_forward(word_embed_out, h0, Wx, Wh, b)
+        else:
+            h, forward_caches = lstm_forward(word_embed_out, h0, Wx, Wh, b)
 
         # (4) Use a (temporal) affine transformation to compute scores over the
         # vocabulary at every timestep using the hidden states, giving an
@@ -140,7 +142,11 @@ class CaptioningRNN(object):
 
         # backward
         dh, dW_vocab, db_vocab = temporal_affine_backward(dout, temporal_affine_cahce)
-        dword_embed_out, dh0, dWx, dWh, db = rnn_backward(dh, rnn_forward_caches)
+        if self.cell_type == 'rnn':
+            dword_embed_out, dh0, dWx, dWh, db = rnn_backward(dh, forward_caches)
+        else:
+            dword_embed_out, dh0, dWx, dWh, db = lstm_backward(dh, forward_caches)
+
         dW_embed = word_embedding_backward(dword_embed_out, word_embed_cahce)
         dW_proj = features.T.dot(dh0)
         db_proj = np.sum(dh0, 0)
@@ -191,6 +197,7 @@ class CaptioningRNN(object):
         W_vocab, b_vocab = self.params['W_vocab'], self.params['b_vocab']
 
         prev_h = features.dot(W_proj) + b_proj
+        prev_c = np.zeros_like(prev_h)
         prev_word = np.ones((N, 1), dtype=captions.dtype) * self._start
 
         captions[:, 0] = prev_word.reshape(N)
@@ -202,7 +209,11 @@ class CaptioningRNN(object):
             # (2)
             # Make an RNN step using the previous hidden state and the embedded
             # current word to get the next hidden state.
-            next_h, _ = rnn_step_forward(out[:, 0, :], prev_h, Wx, Wh, b)
+            if self.cell_type == 'rnn':
+                next_h, _ = rnn_step_forward(out[:, 0, :], prev_h, Wx, Wh, b)
+            else:
+                next_h, next_c, _ = lstm_step_forward(out[:, 0, :], prev_h, prev_c, Wx, Wh, b)
+                prev_c = next_c
             # (3)
             # Apply the learned affine transformation to the next hidden state to
             # get scores for all words in the vocabulary
